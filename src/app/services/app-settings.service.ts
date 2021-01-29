@@ -3,6 +3,7 @@ import * as url from 'url';
 
 export type WalletStore = 'localStorage'|'none';
 export type PoWSource = 'server'|'clientCPU'|'clientWebGL'|'best';
+export type LedgerConnectionType = 'usb'|'bluetooth';
 
 interface AppSettings {
   displayDenomination: string;
@@ -12,7 +13,9 @@ interface AppSettings {
   defaultRepresentative: string | null;
   lockOnClose: number;
   lockInactivityMinutes: number;
+  ledgerReconnect: LedgerConnectionType;
   powSource: PoWSource;
+  multiplierSource: number;
   pendingOption: string;
   serverName: string;
   serverAPI: string | null;
@@ -34,7 +37,9 @@ export class AppSettingsService {
     defaultRepresentative: null,
     lockOnClose: 1,
     lockInactivityMinutes: 30,
+    ledgerReconnect: 'usb',
     powSource: 'best',
+    multiplierSource: 1,
     pendingOption: 'amount',
     serverName: 'random',
     serverAPI: null,
@@ -64,8 +69,16 @@ export class AppSettingsService {
     {
       name: 'Nanos.cc',
       value: 'nanos',
-      api: 'https://proxy.nanos.cc/proxy',
-      ws: 'wss://socket.nanos.cc',
+      api: 'https://nault.nanos.cc/proxy',
+      ws: 'wss://nault-ws.nanos.cc',
+      auth: null,
+      shouldRandom: true,
+    },
+    {
+      name: 'VoxPopuli',
+      value: 'voxpopuli',
+      api: 'https://vox.nanos.cc/api',
+      ws: 'wss://vox.nanos.cc/websocket',
       auth: null,
       shouldRandom: true,
     },
@@ -157,7 +170,7 @@ export class AppSettingsService {
   }
 
   setAppSettings(settingsObject) {
-    for (let key in settingsObject) {
+    for (const key in settingsObject) {
       if (!settingsObject.hasOwnProperty(key)) continue;
       this.settings[key] = settingsObject[key];
     }
@@ -175,7 +188,9 @@ export class AppSettingsService {
       defaultRepresentative: null,
       lockOnClose: 1,
       lockInactivityMinutes: 30,
+      ledgerReconnect: 'usb',
       powSource: 'best',
+      multiplierSource: 1,
       pendingOption: 'amount',
       serverName: 'random',
       serverAPI: null,
@@ -188,7 +203,7 @@ export class AppSettingsService {
 
   // Get the base URL part of the serverAPI, e.g. https://nanovault.io from https://nanovault.io/api/node-api.
   getServerApiBaseUrl(): string {
-    let u = url.parse(this.settings.serverAPI);
+    const u = url.parse(this.settings.serverAPI);
     u.pathname = '/';
     return url.format(u);
   }

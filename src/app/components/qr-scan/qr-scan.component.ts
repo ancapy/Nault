@@ -1,11 +1,11 @@
 import { Component, OnInit } from '@angular/core';
-import { Router } from "@angular/router";
+import { Router } from '@angular/router';
 import { UtilService } from '../../services/util.service';
-import { NotificationService } from "../../services/notification.service";
-import { WalletService } from "../../services/wallet.service";
+import { NotificationService } from '../../services/notification.service';
+import { WalletService } from '../../services/wallet.service';
 import { BarcodeFormat } from '@zxing/library';
 import { BehaviorSubject } from 'rxjs';
-import { RemoteSignService } from "../../services/remote-sign.service";
+import { RemoteSignService } from '../../services/remote-sign.service';
 
 @Component({
   selector: 'app-qr-scan',
@@ -49,7 +49,7 @@ export class QrScanComponent implements OnInit {
     this.qrResultString = null;
   }
 
-  onCamerasFound(devices: MediaDeviceInfo[]): void {    
+  onCamerasFound(devices: MediaDeviceInfo[]): void {
     this.availableDevices = devices;
     this.hasDevices = Boolean(devices && devices.length);
   }
@@ -57,23 +57,32 @@ export class QrScanComponent implements OnInit {
   onCodeResult(resultString: string) {
     this.qrResultString = resultString;
 
-    const nano_scheme = /^(nano|nanorep|nanoseed|nanokey|nanosign|nanoprocess):.+$/g
+    const nano_scheme = /^(nano|nanorep|nanoseed|nanokey|nanosign|nanoprocess|https):.+$/g;
 
-    if(this.util.account.isValidAccount(resultString)){
+    if (this.util.account.isValidAccount(resultString)) {
       // Got address, routing to send...
       this.router.navigate(['send'], {queryParams: {to: resultString}});
 
-    } else if(this.util.nano.isValidSeed(resultString)){
+    } else if (this.util.nano.isValidSeed(resultString)) {
       // Seed
       this.handleSeed(resultString);
 
-    } else if(nano_scheme.test(resultString)) {
+    } else if (nano_scheme.test(resultString)) {
       // This is a valid Nano scheme URI
-      var url = new URL(resultString)
+      const url = new URL(resultString);
 
-      if(url.protocol === 'nano:' && this.util.account.isValidAccount(url.pathname)){
+      // check if QR contains a full URL path
+      if (url.protocol === 'https:') {
+        if (url.pathname === '/import-wallet' && url.hash.slice(1).length) {
+          // wallet import
+          this.router.navigate(['import-wallet'], { queryParams: {hostname: url.hostname}, fragment: url.hash.slice(1)});
+        } else if (url.pathname === '/import-address-book' && url.hash.slice(1).length) {
+          // address book import
+          this.router.navigate(['import-address-book'], { queryParams: {hostname: url.hostname}, fragment: url.hash.slice(1)});
+        }
+      } else if (url.protocol === 'nano:' && this.util.account.isValidAccount(url.pathname)) {
         // Got address, routing to send...
-        var amount = url.searchParams.get('amount');
+        const amount = url.searchParams.get('amount');
         this.router.navigate(['send'], { queryParams: {
           to: url.pathname,
           amount: amount ? this.util.nano.rawToMnano(amount) : null
@@ -81,7 +90,7 @@ export class QrScanComponent implements OnInit {
 
       } else if (url.protocol === 'nanorep:' && this.util.account.isValidAccount(url.pathname)) {
         // Representative change
-        this.router.navigate(['representatives'], { queryParams: { 
+        this.router.navigate(['representatives'], { queryParams: {
           hideOverview: true,
           accounts: 'all',
           representative: url.pathname
@@ -95,17 +104,17 @@ export class QrScanComponent implements OnInit {
         this.handlePrivateKey(url.pathname);
       } else if (url.protocol === 'nanosign:') {
           this.remoteSignService.navigateSignBlock(url);
-        
+
       } else if (url.protocol === 'nanoprocess:') {
           this.remoteSignService.navigateProcessBlock(url);
       }
-      
+
     } else {
-      this.notifcationService.sendWarning('This QR code is not recognized.', { length: 5000, identifier: 'qr-not-recognized' })
+      this.notifcationService.sendWarning('This QR code is not recognized.', { length: 5000, identifier: 'qr-not-recognized' });
     }
   }
 
-  handleSeed(seed){
+  handleSeed(seed) {
     if (this.hasAccounts) {
       // Wallet already set up, sweeping...
       this.router.navigate(['sweeper'], { state: { seed: seed } });
@@ -115,7 +124,7 @@ export class QrScanComponent implements OnInit {
     }
   }
 
-  handlePrivateKey(key){
+  handlePrivateKey(key) {
     if (this.hasAccounts) {
       // Wallet already set up, sweeping...
       this.router.navigate(['sweeper'], { state: { seed: key } });

@@ -1,7 +1,8 @@
 import {Component, OnInit} from '@angular/core';
-import {WalletService} from "../../services/wallet.service";
-import {RepresentativeService} from "../../services/representative.service";
-import {Router} from "@angular/router";
+import {WalletService} from '../../services/wallet.service';
+import {NanoBlockService} from '../../services/nano-block.service';
+import {RepresentativeService} from '../../services/representative.service';
+import {Router} from '@angular/router';
 
 @Component({
   selector: 'app-change-rep-widget',
@@ -16,20 +17,27 @@ export class ChangeRepWidgetComponent implements OnInit {
   showRepChangeRequired = false;
   showRepHelp = false;
   selectedAccount = null;
+  selectedAccountHasRep = false;
+  initialLoadComplete = false;
 
   constructor(
     private walletService: WalletService,
+    private blockService: NanoBlockService,
     private repService: RepresentativeService,
     private router: Router
     ) { }
 
   async ngOnInit() {
-    this.representatives = await this.repService.getRepresentativesOverview();
-    this.updateDisplayedRepresentatives(); 
-
     this.repService.walletReps$.subscribe(async reps => {
+      if ( reps[0] === null ) {
+        // initial state from new BehaviorSubject([null])
+        return;
+      }
+
       this.representatives = reps;
+      await this.updateChangeableRepresentatives();
       this.updateDisplayedRepresentatives();
+      this.initialLoadComplete = true;
     });
 
     this.walletService.wallet.selectedAccount$.subscribe(async acc => {
@@ -37,7 +45,19 @@ export class ChangeRepWidgetComponent implements OnInit {
       this.updateDisplayedRepresentatives();
     });
 
-    await this.repService.detectChangeableReps();
+    // Detect if a wallet is reset
+    this.walletService.wallet.newWallet$.subscribe(shouldReload => {
+      if (shouldReload) {
+        this.resetRepresentatives();
+      }
+    });
+
+    // Detect if a new open block is received
+    this.blockService.newOpenBlock$.subscribe(async shouldReload => {
+      if (shouldReload) {
+        await this.repService.getRepresentativesOverview(); // calls walletReps$.next
+      }
+    });
 
     this.repService.changeableReps$.subscribe(async reps => {
       // Includes both acceptable and bad reps
@@ -49,13 +69,34 @@ export class ChangeRepWidgetComponent implements OnInit {
 
       this.updateDisplayedRepresentatives();
     });
+
+    this.selectedAccount = this.walletService.wallet.selectedAccount;
+    this.updateSelectedAccountHasRep();
+    await this.repService.getRepresentativesOverview(); // calls walletReps$.next
+  }
+
+  async resetRepresentatives() {
+    console.log('Reloading representatives..');
+    this.initialLoadComplete = false;
+    this.selectedAccount = null;
+    this.representatives = [];
+    this.changeableRepresentatives = [];
+    this.showRepChangeRequired = false;
+    this.updateDisplayedRepresentatives();
+    await this.repService.getRepresentativesOverview(); // calls walletReps$.next
+    console.log('Representatives reloaded');
+  }
+
+  async updateChangeableRepresentatives() {
+    await this.repService.detectChangeableReps(this.representatives);
   }
 
   updateDisplayedRepresentatives() {
+    this.updateSelectedAccountHasRep();
     this.displayedRepresentatives = this.getDisplayedRepresentatives(this.representatives);
   }
 
-  includeRepRequiringChange(displayedReps : any[]) {
+  includeRepRequiringChange(displayedReps: any[]) {
     const repRequiringChange =
       this.changeableRepresentatives
         .sort((a, b) => b.delegatedWeight.minus(a.delegatedWeight))
@@ -69,19 +110,32 @@ export class ChangeRepWidgetComponent implements OnInit {
           )
         )[0];
 
-    if(repRequiringChange == null) {
+    if (repRequiringChange == null) {
       return [...displayedReps];
     }
- 
+
     return [ ...displayedReps, Object.assign({}, repRequiringChange) ];
   }
 
-  getDisplayedRepresentatives(representatives : any[]) {
-    if(this.representatives.length === 0) {
+  updateSelectedAccountHasRep() {
+    if (this.selectedAccount != null) {
+      this.selectedAccountHasRep = !!this.selectedAccount.frontier;
+      return;
+    }
+
+    this.selectedAccountHasRep =
+      this.walletService.wallet.accounts.some(
+        (acc) =>
+          (acc.frontier)
+      );
+  }
+
+  getDisplayedRepresentatives(representatives: any[]) {
+    if (this.representatives.length === 0) {
       return [];
     }
 
-    if(this.selectedAccount !== null) {
+    if (this.selectedAccount !== null) {
       const selectedAccountRep =
         this.representatives
           .filter(
@@ -92,20 +146,20 @@ export class ChangeRepWidgetComponent implements OnInit {
               )
           )[0];
 
-      if(selectedAccountRep == null) {
+      if (selectedAccountRep == null) {
         return [];
       }
 
-      let displayedReps = [ Object.assign( {}, selectedAccountRep ) ];
+      const displayedRepsAllAccounts = [ Object.assign( {}, selectedAccountRep ) ];
 
-      return this.includeRepRequiringChange(displayedReps);
+      return this.includeRepRequiringChange(displayedRepsAllAccounts);
     }
 
-    let sortedRepresentatives: any[] = [...representatives];
+    const sortedRepresentatives: any[] = [...representatives];
 
     sortedRepresentatives.sort((a, b) => b.delegatedWeight.minus(a.delegatedWeight));
 
-    let displayedReps = [ Object.assign( {}, sortedRepresentatives[0] ) ];
+    const displayedReps = [ Object.assign( {}, sortedRepresentatives[0] ) ];
 
     return this.includeRepRequiringChange(displayedReps);
   }
@@ -115,6 +169,7 @@ export class ChangeRepWidgetComponent implements OnInit {
   }
 
   showRepSelectionForSpecificRep(clickedRep) {
+    this.showRepHelp = false;
     const accountsToChangeRepFor = (
         (
             (this.selectedAccount !== null)
@@ -125,7 +180,7 @@ export class ChangeRepWidgetComponent implements OnInit {
         this.representatives
           .filter(
             (rep) =>
-              (rep.id == clickedRep.id)
+              (rep.id === clickedRep.id)
           )
           .map(
             (rep) =>
@@ -135,7 +190,9 @@ export class ChangeRepWidgetComponent implements OnInit {
       )
     );
 
-    this.router.navigate(['/representatives'], { queryParams: { hideOverview: true, accounts: accountsToChangeRepFor, showRecommended: true } });
+    this.router.navigate(['/representatives'], {
+      queryParams: { hideOverview: true, accounts: accountsToChangeRepFor, showRecommended: true }
+    });
   }
 
   showRepSelectionForAllChangeableReps() {

@@ -1,9 +1,9 @@
 import { Injectable } from '@angular/core';
-import {BehaviorSubject} from "rxjs";
-import {BaseApiAccount, WalletApiAccount, WalletService} from "./wallet.service";
-import BigNumber from "bignumber.js";
-import {ApiService} from "./api.service";
-import {UtilService} from "./util.service";
+import {BehaviorSubject} from 'rxjs';
+import {BaseApiAccount, WalletApiAccount, WalletService} from './wallet.service';
+import BigNumber from 'bignumber.js';
+import {ApiService} from './api.service';
+import {UtilService} from './util.service';
 import { NinjaService } from './ninja.service';
 
 export interface RepresentativeStatus {
@@ -12,13 +12,15 @@ export interface RepresentativeStatus {
   highWeight: boolean;
   veryLowUptime: boolean;
   lowUptime: boolean;
+  closing: boolean;
   markedToAvoid: boolean;
   trusted: boolean;
   changeRequired: boolean;
   warn: boolean;
   known: boolean;
-  uptime: Number;
-  score: Number;
+  daysSinceLastVoted: number;
+  uptime: number;
+  score: number;
 }
 
 export interface RepresentativeOverview {
@@ -57,7 +59,7 @@ export class RepresentativeService {
   representatives$ = new BehaviorSubject([]);
   representatives = [];
 
-  walletReps$ = new BehaviorSubject([]);
+  walletReps$ = new BehaviorSubject([null]);
   walletReps = [];
 
   changeableReps$ = new BehaviorSubject([]);
@@ -80,8 +82,8 @@ export class RepresentativeService {
    * Determine if any accounts in the wallet need a rep change
    * @returns {Promise<FullRepresentativeOverview[]>}
    */
-  async detectChangeableReps(): Promise<FullRepresentativeOverview[]> {
-    const representatives = await this.getRepresentativesOverview();
+  async detectChangeableReps(cachedReps?: FullRepresentativeOverview[]): Promise<FullRepresentativeOverview[]> {
+    const representatives = cachedReps ? cachedReps : await this.getRepresentativesOverview();
 
     // Now based on some of their properties, we filter them out
     const needsChange = [];
@@ -120,8 +122,8 @@ export class RepresentativeService {
     const onlineReps = await this.getOnlineRepresentatives();
     const quorum = await this.api.confirmationQuorum();
 
-    const online_stake_total = this.util.nano.rawToMnano(quorum.online_stake_total);
-    this.onlineStakeTotal = new BigNumber(online_stake_total);
+    const online_stake_total = quorum ? this.util.nano.rawToMnano(quorum.online_stake_total) : null;
+    this.onlineStakeTotal = online_stake_total ? new BigNumber(online_stake_total) : null;
 
     const allReps = [];
 
@@ -132,7 +134,7 @@ export class RepresentativeService {
       const knownRepNinja = await this.ninja.getAccount(representative.account);
 
       const nanoWeight = this.util.nano.rawToMnano(representative.weight || 0);
-      const percent = nanoWeight.div(this.onlineStakeTotal).times(100);
+      const percent = this.onlineStakeTotal ? nanoWeight.div(this.onlineStakeTotal).times(100) : new BigNumber(0);
 
       const repStatus: RepresentativeStatus = {
         online: repOnline,
@@ -140,8 +142,10 @@ export class RepresentativeService {
         highWeight: false,
         veryLowUptime: false,
         lowUptime: false,
+        closing: false,
         markedToAvoid: false,
         trusted: false,
+        daysSinceLastVoted: 0,
         changeRequired: false,
         warn: false,
         known: false,
@@ -157,36 +161,75 @@ export class RepresentativeService {
         status = 'alert'; // Has extremely high voting weight
         repStatus.veryHighWeight = true;
         repStatus.changeRequired = true;
-      } else if (percent.gte(1)) {
+      } else if (percent.gte(2)) {
         status = 'warn'; // Has high voting weight
         repStatus.highWeight = true;
       }
 
       if (knownRep) {
-        status = status === 'none' ? 'ok' : status; // In our list
+        // in the list of known representatives
+        status = status === 'none' ? 'ok' : status;
         label = knownRep.name;
         repStatus.known = true;
         if (knownRep.trusted) {
-          status = 'trusted'; // In our list and marked as trusted
+          status = 'trusted'; // marked as trusted
           repStatus.trusted = true;
         }
         if (knownRep.warn) {
-          status = 'alert'; // In our list and marked for avoidance
+          status = 'alert'; // marked to avoid
           repStatus.markedToAvoid = true;
           repStatus.warn = true;
           repStatus.changeRequired = true;
         }
       } else if (knownRepNinja) {
-        status = status === 'none' ? 'ok' : status; // In our list
+        status = status === 'none' ? 'ok' : status;
         label = knownRepNinja.alias;
-        repStatus.uptime = knownRepNinja.uptime_over.week;
+      }
+
+      const uptimeIntervalDays = 7;
+
+      if (knownRepNinja && !repStatus.trusted) {
+        if (knownRepNinja.closing === true) {
+          status = 'alert';
+          repStatus.closing = true;
+          repStatus.warn = true;
+          repStatus.changeRequired = true;
+        }
+
+        let uptimeIntervalValue = knownRepNinja.uptime_over.week;
+
+        // temporary fix for knownRepNinja.uptime_over.week always returning 0
+        // uptimeIntervalValue = knownRepNinja.uptime_over.month;
+        // uptimeIntervalDays = 30;
+        // /temporary fix
+
+        // consider uptime value at least 1/<interval days> of daily uptime
+        uptimeIntervalValue = Math.max(
+          uptimeIntervalValue,
+          (knownRepNinja.uptime_over.day / uptimeIntervalDays)
+        );
+
+        if (repOnline === true) {
+          // consider uptime value at least 1% if the rep is currently online
+          uptimeIntervalValue = Math.max(uptimeIntervalValue, 1);
+        }
+
+        repStatus.uptime = uptimeIntervalValue;
         repStatus.score = knownRepNinja.score;
-        if (knownRepNinja.uptime_over.week < 80) {
+
+        const msSinceLastVoted = knownRepNinja.lastVoted ? ( Date.now() - new Date(knownRepNinja.lastVoted).getTime() ) : 0;
+        repStatus.daysSinceLastVoted = Math.floor(msSinceLastVoted / 86400000);
+        if (uptimeIntervalValue === 0) {
+          // display a minimum of <interval days> if the uptime value is 0%
+          repStatus.daysSinceLastVoted = Math.max(repStatus.daysSinceLastVoted, uptimeIntervalDays);
+        }
+
+        if (uptimeIntervalValue < 50) {
           status = 'alert';
           repStatus.veryLowUptime = true;
           repStatus.warn = true;
           repStatus.changeRequired = true;
-        } else if (knownRepNinja.uptime_over.week < 90) {
+        } else if (uptimeIntervalValue < 60) {
           if (status !== 'alert') {
             status = 'warn';
           }
@@ -198,6 +241,7 @@ export class RepresentativeService {
         status = 'alert';
         repStatus.uptime = 0;
         repStatus.veryLowUptime = true;
+        repStatus.daysSinceLastVoted = uptimeIntervalDays;
         repStatus.warn = true;
         repStatus.changeRequired = true;
       } else {
@@ -231,10 +275,10 @@ export class RepresentativeService {
    */
   getUniqueRepresentatives(accounts: WalletApiAccount[]): RepresentativeOverview[] {
     const representatives = [];
-    for (let account of accounts) {
+    for (const account of accounts) {
       if (!account || !account.representative) continue; // Account doesn't exist yet
 
-      const existingRep = representatives.find(rep => rep.id == account.representative);
+      const existingRep = representatives.find(rep => rep.id === account.representative);
       if (existingRep) {
         existingRep.weight = existingRep.weight.plus(new BigNumber(account.balance));
         existingRep.accounts.push(account);
@@ -259,7 +303,7 @@ export class RepresentativeService {
     const representatives = [];
     const reps = await this.api.representativesOnline();
     if (!reps) return representatives;
-    for (let representative in reps.representatives) {
+    for (const representative in reps.representatives) {
       if (!reps.representatives.hasOwnProperty(representative)) continue;
       representatives.push(reps.representatives[representative]);
     }
@@ -328,7 +372,7 @@ export class RepresentativeService {
   }
 
   getRepresentative(id): StoredRepresentative | undefined {
-    return this.representatives.find(rep => rep.id == id);
+    return this.representatives.find(rep => rep.id === id);
   }
 
   // Reset representatives list to the default one
@@ -347,7 +391,9 @@ export class RepresentativeService {
     if (trusted) newRepresentative.trusted = true;
     if (warn) newRepresentative.warn = true;
 
-    const existingRepresentative = this.representatives.find(r => r.name.toLowerCase() === name.toLowerCase() || r.id.toLowerCase() === accountID.toLowerCase());
+    const existingRepresentative = this.representatives.find(
+      r => r.name.toLowerCase() === name.toLowerCase() || r.id.toLowerCase() === accountID.toLowerCase()
+    );
     if (existingRepresentative) {
       this.representatives.splice(this.representatives.indexOf(existingRepresentative), 1, newRepresentative);
     } else {
@@ -430,6 +476,12 @@ export class RepresentativeService {
       name: 'Nano Foundation #8',
       warn: true,
     },
+    // Expected to shut down March 2021. Remove later.
+    {
+      id: 'nano_3rpixaxmgdws7nk7sx6owp8d8becj9ei5nef6qiwokgycsy9ufytjwgj6eg9',
+      name: 'Repnode.org - Will shut down',
+      warn: true,
+    }
   ];
 
 }

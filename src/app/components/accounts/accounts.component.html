@@ -26,68 +26,71 @@
       <table class="uk-table uk-table-striped uk-table-small">
         <thead>
         <tr>
-          <th class="uk-width-3-5@m uk-width-1-2">
-            <a class="account-index" *ngIf="viewAdvanced" uk-icon="icon: hashtag;" title="Sort Accounts" (click)="sortAccounts()" uk-tooltip>
-            </a>
+          <th scope="col" class="uk-width-3-5@m uk-width-1-2">
             Account
           </th>
-          <th class="uk-width-1-5@m uk-width-1-4 uk-text-right">Balance</th>
-          <th class="uk-width-1-5@m uk-width-1-4 uk-text-right"></th>
+          <th scope="col" class="uk-width-1-5@m uk-width-1-4 uk-text-right">Balance</th>
+          <th scope="col" class="table-header-delete-account uk-width-1-5@m uk-width-1-4 uk-text-right"></th>
         </tr>
         </thead>
         <tbody>
         <tr *ngFor="let account of accounts" class="uk-visible-toggle">
           <td class="uk-visible-toggle uk-text-truncate">
             <div uk-grid>
-              <div class="uk-width-expand uk-text-truncate">
-                <span class="account-index" *ngIf="viewAdvanced">
-                  {{ account.index }}
-                </span>
-                <a [routerLink]="'/account/' + account.id" class="uk-link-text" title="View Account Details" uk-tooltip>
-                  <span *ngIf="account.addressBookName" class="uk-margin-small-right uk-label uk-label-default">{{ account.addressBookName }}</span> 
+              <a [routerLink]="'/account/' + account.id" [class]="[ 'uk-width-auto', 'uk-text-truncate', 'account-container', !isLedgerWallet ? 'narrow' : 'wide' ]">
+                <div class="uk-width-1-1">
+                  <div class="account-index" *ngIf="viewAdvanced"><span>#</span>{{ account.index }}</div>
+                  <div class="account-label">{{
+                      account.addressBookName
+                    ? account.addressBookName
+                    : (
+                        viewAdvanced
+                      ? 'Account'
+                      : 'Account #' + account.index
+                    )
+                  }}</div>
+                </div>
+                <div class="nano-address-clickable nano-address-monospace uk-text-truncate">
                   <app-nano-account-id [accountID]="account.id" middle="on"></app-nano-account-id>
-                </a>
-              </div>
-              <div class="uk-width-auto" style="padding-left: 10px;">
-                <ul class="uk-hidden-hover uk-iconnav">
-                  <!--<li class="account-index">#{{ account.index }}</li>-->
+                </div>
+              </a>
+              <div class="nano-address-actions uk-width-auto copy-container">
+                <ul class="uk-iconnav copy-icons">
                   <li><a ngxClipboard [cbContent]="account.id" (cbOnSuccess)="copied()" uk-icon="icon: copy" title="Copy Account Address" uk-tooltip></a></li>
                   <li *ngIf="isLedgerWallet"><a uk-icon="icon: commenting" title="Confirm Address On Ledger" (click)="showLedgerAddress(account)" uk-tooltip></a></li>
                 </ul>
               </div>
             </div>
           </td>
-          <td class="uk-text-right">
-            {{ account.balance | rai: settings.settings.displayDenomination }}
-            <div *ngIf="account.balanceRaw.gt(0)" style="font-size: 10px;" class="uk-text-muted">
-              +{{ account.balanceRaw.toString(10) | squeeze:'5,5' }} raw
+          <td class="account-amounts-column uk-text-right">
+            <div class="account-amounts-primary uk-width-1-1">
+              <div *ngIf="account.pending.gt(0)" class="incoming-label">
+                <div class="text-snippet">New</div>
+                <div class="text-full">+{{ account.pending | rai: settings.settings.displayDenomination + ',true' }}</div>
+              </div>
+              <span [title]="( account.balanceRaw.gt(0) ? ( '+' + ( account.balanceRaw.toString(10) | squeeze:'5,5' ) + ' raw' ) : '' )">
+                {{ account.balance | rai: settings.settings.displayDenomination }}
+              </span>
             </div>
-            <div *ngIf="account.pending.gt(0)" class="uk-text-muted uk-text-small">
-              {{ account.pending | rai: settings.settings.displayDenomination }}
-            </div>
-            <div *ngIf="account.pendingRaw.gt(0)" style="font-size: 10px;" class="uk-text-muted">
-              +{{ account.pendingRaw.toString(10) | squeeze:'5,5' }} raw
+            <div class="uk-width-1-1">
+              {{ account.balanceFiat | fiat: settings.settings.displayCurrency }}
             </div>
           </td>
-          <td class="uk-text-left@m uk-text-right">
-            {{ account.balanceFiat | fiat: settings.settings.displayCurrency }}
-            <div *ngIf="account.pending.gt(0)" class="uk-text-muted uk-text-small">
-              {{ account.pendingFiat | fiat: settings.settings.displayCurrency }}
+          <td class="uk-text-right">
+            <div class="uk-float-right">
+              <a (click)="deleteAccount(account)" class="icon-delete-account uk-text-danger" title="Hide Account" uk-tooltip><span uk-icon="icon: close;"></span></a>
             </div>
-            <div class="uk-float-right uk-hidden-hover">
-              <a (click)="deleteAccount(account)" class="uk-text-danger" title="Hide Account" uk-tooltip><span uk-icon="icon: close;"></span></a>
-            </div>
-
           </td>
         </tr>
-        <tr *ngIf="!(accounts).length">
-          <td colspan="4" style="text-align: center;">You don't have any accounts yet, <a (click)="createAccount()">click here to create one</a></td>
+        <tr *ngIf="!accounts.length">
+          <td colspan="4" style="text-align: center;">You don't have any accounts yet, <a (click)="createAccount()">click here to create one</a>.</td>
+        </tr>
+        <tr class="uk-alert uk-alert-primary missing-accounts-hint" *ngIf="!isSingleKeyWallet">
+          <td colspan="4" style="text-align: center;"><span uk-icon="icon: info"></span> Missing accounts? <a (click)="createAccount()">Add new account</a> to import a previously used address.</td>
         </tr>
         </tbody>
       </table>
     </div>
-
-    <p class="uk-text-center uk-text-small">Click on an account to view more details!</p>
 
   </div>
 </div>

@@ -1,6 +1,6 @@
 import 'babel-polyfill';
 
-import { app, BrowserWindow, shell, Menu, protocol, webFrame, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, Menu, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as url from 'url';
 import * as path from 'path';
@@ -14,10 +14,19 @@ initialize();
 let mainWindow;
 
 function createWindow () {
+  let newWidth = 1000;
+  let newHeight = 600;
+  try {
+    const mainScreen = screen.getPrimaryDisplay();
+    const dimensions = mainScreen.size;
+    newWidth = Math.max(newWidth, Math.round(dimensions.width * 0.7));
+    newHeight = Math.max(newHeight, Math.round(dimensions.height * 0.85));
+  } catch {}
+
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 600,
+    width: newWidth,
+    height: newHeight,
     webPreferences:
     {
       webSecurity: false,
@@ -150,9 +159,11 @@ function getApplicationMenu() {
           label: `Nault Version: ${autoUpdater.currentVersion}`,
         },
         {
-          label: 'View Latest Updates',
+          label: 'Check for Updates',
           click () { loadExternal('https://github.com/Nault/Nault/releases'); }
         },
+        // updates not working, disable for now
+        /**
         {type: 'separator'},
         {
           label: `Check for Updates...`,
@@ -160,6 +171,7 @@ function getApplicationMenu() {
             checkForUpdates();
           }
         },
+        */
       ]
     }
   ];
@@ -171,9 +183,11 @@ function getApplicationMenu() {
         {role: 'about'},
         {type: 'separator'},
         {
-          label: `Check for Updates...`,
+          label: `Check for Updates`,
           click (menuItem, browserWindow) {
-            checkForUpdates();
+            // updates not working, disable for now
+            // checkForUpdates();
+            loadExternal('https://github.com/Nault/Nault/releases');
           }
         },
         {type: 'separator'},

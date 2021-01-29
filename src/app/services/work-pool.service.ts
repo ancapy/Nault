@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
-import {PowService} from "./pow.service";
-import {NotificationService} from "./notification.service";
+import {PowService, baseThreshold} from './pow.service';
+import {NotificationService} from './notification.service';
+import {UtilService} from './util.service';
 
 @Injectable()
 export class WorkPoolService {
@@ -9,20 +10,26 @@ export class WorkPoolService {
   cacheLength = 25;
   workCache = [];
 
-  constructor(private pow: PowService, private notifications: NotificationService) { }
+  currentlyProcessingHashes = {};
+
+  constructor(private pow: PowService, private notifications: NotificationService, private util: UtilService) { }
+
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
   public workExists(hash) {
-    return !!this.workCache.find(p => p.hash == hash);
+    return !!this.workCache.find(p => p.hash === hash);
   }
 
   // A simple helper, which doesn't wait for a response (Used for pre-loading work)
-  public addWorkToCache(hash, multiplier=1) {
+  public addWorkToCache(hash, multiplier = 1) {
     this.getWork(hash, multiplier);
   }
 
   // Remove a hash from from the cache
   public removeFromCache(hash) {
-    const cachedIndex = this.workCache.findIndex(p => p.hash == hash);
+    const cachedIndex = this.workCache.findIndex(p => p.hash === hash);
     if (cachedIndex === -1) return;
 
     this.workCache.splice(cachedIndex, 1);
@@ -42,21 +49,41 @@ export class WorkPoolService {
   }
 
   // Get work for a hash.  Uses the cache, or the current setting for generating it.
-  public async getWork(hash, multiplier=1) {
-    const cached = this.workCache.find(p => p.hash == hash);
-    if (cached && cached.work) {
-      console.log('Using cached work: ' + cached.work)
-      return cached.work;
+  public async getWork(hash, multiplier = 1) {
+    while ( this.currentlyProcessingHashes[hash] === true ) {
+      await this.sleep(100);
     }
 
+    const cached = this.workCache.find(p => p.hash === hash);
+
+    try {
+      if (cached && cached.work &&
+          this.util.nano.validateWork(hash, this.util.nano.difficultyFromMultiplier(multiplier, baseThreshold), cached.work)) {
+        console.log('Using cached work: ' + cached.work);
+        return cached.work;
+      }
+    } catch (err) {
+      console.log('Error validating cached work. ' + err);
+    }
+
+    this.currentlyProcessingHashes[hash] = true;
+
     const work = await this.pow.getPow(hash, multiplier);
+
     if (!work) {
-      this.notifications.sendWarning(`Failed to retrieve work for ${hash}.  Try a different PoW method.`);
+      this.notifications.sendWarning(`Failed to retrieve work for ${hash}. Try a different PoW method.`);
+      delete this.currentlyProcessingHashes[hash];
       return null;
     }
 
-    console.log('Work found: ' + work)
+    console.log('Work found: ' + work);
+
+    // remove duplicates
+    this.workCache = this.workCache.filter(entry => (entry.hash !== hash));
+
     this.workCache.push({ hash, work });
+    delete this.currentlyProcessingHashes[hash];
+
     if (this.workCache.length >= this.cacheLength) this.workCache.shift(); // Prune if we are at max length
     this.saveWorkCache();
 
@@ -67,11 +94,8 @@ export class WorkPoolService {
    * Save the work cache to localStorage
    */
   private saveWorkCache() {
-    // Remove duplicates
-    this.workCache = this.workCache.reduce((previous, current) => {
-      if (!previous.find(p => p.hash == current.hash)) previous.push(current);
-      return previous;
-    }, []);
+    // Remove duplicates by keeping the last updated work
+    this.workCache = this.uniqByKeepLast(this.workCache, it => it.hash);
 
     localStorage.setItem(this.storeKey, JSON.stringify(this.workCache));
   }
@@ -88,5 +112,18 @@ export class WorkPoolService {
     this.workCache = workCache;
 
     return this.workCache;
+  }
+
+  /**
+   * Remove duplicates but keep the last one
+   * @param a array
+   * @param key it => it.hash
+   */
+  private uniqByKeepLast(a, key) {
+    return [
+        ...new Map(
+            a.map(x => [key(x), x])
+        ).values()
+    ];
   }
 }

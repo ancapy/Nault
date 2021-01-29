@@ -1,10 +1,12 @@
 import {AfterViewInit, Component, OnInit} from '@angular/core';
-import {AddressBookService} from "../../services/address-book.service";
-import {WalletService} from "../../services/wallet.service";
-import {NotificationService} from "../../services/notification.service";
-import {ModalService} from "../../services/modal.service";
-import {UtilService} from "../../services/util.service";
-import { QrModalService } from "../../services/qr-modal.service";
+import {AddressBookService} from '../../services/address-book.service';
+import {WalletService} from '../../services/wallet.service';
+import {NotificationService} from '../../services/notification.service';
+import {ModalService} from '../../services/modal.service';
+import {UtilService} from '../../services/util.service';
+import { QrModalService } from '../../services/qr-modal.service';
+import {Router} from '@angular/router';
+import * as QRCode from 'qrcode';
 
 @Component({
   selector: 'app-address-book',
@@ -18,14 +20,19 @@ export class AddressBookComponent implements OnInit, AfterViewInit {
   addressBook$ = this.addressBookService.addressBook$;
   newAddressAccount = '';
   newAddressName = '';
+  addressBookShowQRExport = false;
+  addressBookQRExportUrl = '';
+  addressBookQRExportImg = '';
+  importExport = false;
 
   constructor(
     private addressBookService: AddressBookService,
     private walletService: WalletService,
-    private notificationService: NotificationService,
+    public notificationService: NotificationService,
     public modal: ModalService,
     private util: UtilService,
-    private qrModalService: QrModalService) { }
+    private qrModalService: QrModalService,
+    private router: Router) { }
 
   async ngOnInit() {
     this.addressBookService.loadAddressBook();
@@ -34,11 +41,11 @@ export class AddressBookComponent implements OnInit, AfterViewInit {
   ngAfterViewInit() {
     // Listen for reordering events
     document.getElementById('address-book-sortable').addEventListener('moved', (e) => {
-      const element = e.srcElement as HTMLDivElement
+      const element = e.target as HTMLDivElement;
       const elements = element.children;
 
       const result = [].slice.call(elements);
-      const datas = result.map(e => e.dataset.account);
+      const datas = result.map(el => el.dataset.account);
 
       this.addressBookService.setAddressBookOrder(datas);
       this.notificationService.sendSuccess(`Updated address book order`);
@@ -78,7 +85,7 @@ export class AddressBookComponent implements OnInit, AfterViewInit {
       }
       this.cancelNewAddress();
     } catch (err) {
-      this.notificationService.sendError(`Unable to save entry: ${err.message}`)
+      this.notificationService.sendError(`Unable to save entry: ${err.message}`);
     }
   }
 
@@ -89,15 +96,16 @@ export class AddressBookComponent implements OnInit, AfterViewInit {
   }
 
   copied() {
-    this.notificationService.sendSuccess(`Account address copied to clipboard!`);
+    this.notificationService.removeNotification('success-copied');
+    this.notificationService.sendSuccess(`Account address copied to clipboard!`, { identifier: 'success-copied' });
   }
 
   async deleteAddress(account) {
     try {
       this.addressBookService.deleteAddress(account);
-      this.notificationService.sendSuccess(`Successfully deleted address book entry`)
+      this.notificationService.sendSuccess(`Successfully deleted address book entry`);
     } catch (err) {
-      this.notificationService.sendError(`Unable to delete entry: ${err.message}`)
+      this.notificationService.sendError(`Unable to delete entry: ${err.message}`);
     }
   }
 
@@ -112,6 +120,79 @@ export class AddressBookComponent implements OnInit, AfterViewInit {
       }
     }, () => {}
     );
+  }
+
+  async exportAddressBook() {
+    const exportData = this.addressBookService.addressBook;
+    if (exportData.length >= 25) {
+      return this.notificationService.sendError(`Address books with more than 24 entries need to use the file export method.`);
+    }
+    const base64Data = btoa(JSON.stringify(exportData));
+    const exportUrl = `https://nault.cc/import-address-book#${base64Data}`;
+
+    this.addressBookQRExportUrl = exportUrl;
+    this.addressBookQRExportImg = await QRCode.toDataURL(exportUrl);
+    this.addressBookShowQRExport = true;
+  }
+
+  exportAddressBookToFile() {
+    const fileName = `Nault-AddressBook.json`;
+
+    const exportData = this.addressBookService.addressBook;
+    this.triggerFileDownload(fileName, exportData);
+
+    this.notificationService.sendSuccess(`Address book export downloaded!`);
+  }
+
+  importFromFile(files) {
+    if (!files.length) {
+      return;
+    }
+
+    const file = files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const fileData = event.target['result'] as string;
+      try {
+        const importData = JSON.parse(fileData);
+        if (!importData.length || !importData[0].account) {
+          return this.notificationService.sendError(`Bad import data, make sure you selected a Nault Address Book export`);
+        }
+
+        const encoded = btoa(JSON.stringify(importData));
+        this.router.navigate(['import-address-book'], { fragment: encoded });
+      } catch (err) {
+        this.notificationService.sendError(`Unable to parse import data, make sure you selected the right file!`);
+      }
+    };
+
+    reader.readAsText(file);
+  }
+
+  triggerFileDownload(fileName, exportData) {
+    const blob = new Blob([JSON.stringify(exportData)], { type: 'application/json' });
+
+    // Check for iOS, which is weird with saving files
+    const iOS = !!navigator.platform && /iPad|iPhone|iPod/.test(navigator.platform);
+
+    if (window.navigator.msSaveOrOpenBlob) {
+      window.navigator.msSaveBlob(blob, fileName);
+    } else {
+      const elem = window.document.createElement('a');
+      const objUrl = window.URL.createObjectURL(blob);
+      if (iOS) {
+        elem.href = `data:attachment/file,${JSON.stringify(exportData)}`;
+      } else {
+        elem.href = objUrl;
+      }
+      elem.download = fileName;
+      document.body.appendChild(elem);
+      elem.click();
+      setTimeout(function() {
+        document.body.removeChild(elem);
+        window.URL.revokeObjectURL(objUrl);
+      }, 200);
+    }
   }
 
 }

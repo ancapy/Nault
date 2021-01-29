@@ -1,12 +1,12 @@
 import { Component, OnInit } from '@angular/core';
-import {WalletService} from "../../services/wallet.service";
-import {NotificationService} from "../../services/notification.service";
-import {ModalService} from "../../services/modal.service";
-import {ApiService} from "../../services/api.service";
-import {UtilService} from "../../services/util.service";
-import {WorkPoolService} from "../../services/work-pool.service";
-import {AppSettingsService} from "../../services/app-settings.service";
-import {NanoBlockService} from "../../services/nano-block.service";
+import {WalletService, WalletAccount} from '../../services/wallet.service';
+import {NotificationService} from '../../services/notification.service';
+import {ModalService} from '../../services/modal.service';
+import {ApiService} from '../../services/api.service';
+import {UtilService} from '../../services/util.service';
+import {WorkPoolService} from '../../services/work-pool.service';
+import {AppSettingsService} from '../../services/app-settings.service';
+import {NanoBlockService} from '../../services/nano-block.service';
 import * as QRCode from 'qrcode';
 import BigNumber from 'bignumber.js';
 
@@ -19,13 +19,19 @@ import BigNumber from 'bignumber.js';
 
 
 export class ReceiveComponent implements OnInit {
+  nano = 1000000000000000000000000;
   accounts = this.walletService.wallet.accounts;
+  pendingBelowThreshold = [];
 
-  pendingAccountModel = 0;
+  pendingAccountModel = '0';
   pendingBlocks = [];
   qrCodeImage = null;
-  qrAccount = "";
-  qrAmount:BigNumber = null;
+  qrAccount = '';
+  qrAmount: BigNumber = null;
+  minAmount: BigNumber = this.settings.settings.minimumReceive ? this.util.nano.mnanoToRaw(this.settings.settings.minimumReceive) : null;
+  walletAccount: WalletAccount = null;
+  selAccountInit = false;
+  loadingIncomingTxList = false;
 
   constructor(
     private walletService: WalletService,
@@ -38,53 +44,83 @@ export class ReceiveComponent implements OnInit {
     private util: UtilService) { }
 
   async ngOnInit() {
-    setTimeout(() => {
-      this.getPending();
-    }, 100);
+    // Update selected account if changed in the sidebar
+    this.walletService.wallet.selectedAccount$.subscribe(async acc => {
+      if (this.selAccountInit) {
+        this.pendingAccountModel = acc ? acc.id : '0';
+        this.changeQRAccount(this.pendingAccountModel);
+      }
+      this.selAccountInit = true;
+    });
+
+    await this.loadPendingForAll();
+    // Set the account selected in the sidebar as default
+    if (this.walletService.wallet.selectedAccount !== null) {
+      this.pendingAccountModel = this.walletService.wallet.selectedAccount.id;
+      this.changeQRAccount(this.pendingAccountModel);
+    }
   }
 
   async loadPendingForAll() {
-    this.pendingBlocks = this.walletService.wallet.pendingBlocks
+    const walletPendingBlocks = this.walletService.wallet.pendingBlocks;
+    const walletPendingBlocksBelowThreshold = this.walletService.wallet.pendingBelowThreshold;
+
+    this.pendingBlocks = [];
+    this.pendingBelowThreshold = [];
 
     // Now, only if we have results, do a unique on the account names, and run account info on all of them?
-    if (this.pendingBlocks.length) {
-      const frontiers = await this.api.accountsFrontiers(this.pendingBlocks.map(p => p.account));
+    if (walletPendingBlocks.length) {
+      this.loadingIncomingTxList = true;
+      const frontiers = await this.api.accountsFrontiers(walletPendingBlocks.map(p => p.account));
       if (frontiers && frontiers.frontiers) {
-        for (let account in frontiers.frontiers) {
-          if (!frontiers.frontiers.hasOwnProperty(account)) continue;
-          this.workPool.addWorkToCache(frontiers.frontiers[account]);
+        for (const account in frontiers.frontiers) {
+          if (!frontiers.frontiers.hasOwnProperty(account)) {
+            continue;
+          }
+          // Technically should be 1/64 multiplier here but since we don't know if the pending will be received before
+          // a send or change block is made it's safer to use 1x PoW threshold to be sure the cache will work.
+          // On the other hand, it may be more efficient to use 1/64 and simply let the work cache rework in case a send is made instead
+          // The typical user scenario would be to let the wallet auto receive first
+          console.log('Adding pending to work cache');
+          this.workPool.addWorkToCache(frontiers.frontiers[account], 1 / 64);
         }
       }
     }
+
+    this.loadingIncomingTxList = false;
+    this.pendingBlocks = walletPendingBlocks;
+    this.pendingBelowThreshold = walletPendingBlocksBelowThreshold;
   }
 
   async getPending() {
     // clear the list of pending blocks. Updated again with reloadBalances()
-    this.walletService.clearPendingBlocks()
-    await this.walletService.reloadBalances(true)
+    this.pendingBlocks = [];
+    this.loadingIncomingTxList = true;
+    await this.walletService.reloadBalances(true);
     await this.loadPendingForAll();
   }
 
   async changeQRAccount(account) {
-    this.qrAccount = "";
-    var qrCode = null;
+    this.walletAccount = this.walletService.wallet.accounts.find(a => a.id === account) || null;
+    this.qrAccount = '';
+    let qrCode = null;
     if (account.length > 1) {
       this.qrAccount = account;
-      qrCode = await QRCode.toDataURL("nano:"+account + (this.qrAmount ? "?amount="+this.qrAmount.toString(10):""));
+      qrCode = await QRCode.toDataURL('nano:' + account + (this.qrAmount ? '?amount=' + this.qrAmount.toString(10) : ''));
     }
     this.qrCodeImage = qrCode;
   }
 
   async changeQRAmount(amount) {
     this.qrAmount = null;
-    var qrCode = null;
-    if (amount != "") {
+    let qrCode = null;
+    if (amount !== '') {
       if (this.util.account.isValidNanoAmount(amount)) {
         this.qrAmount = this.util.nano.mnanoToRaw(amount);
       }
     }
     if (this.qrAccount.length > 1) {
-      qrCode = await QRCode.toDataURL("nano:"+this.qrAccount + (this.qrAmount ? "?amount="+this.qrAmount.toString(10):""));
+      qrCode = await QRCode.toDataURL('nano:' + this.qrAccount + (this.qrAmount ? '?amount=' + this.qrAmount.toString(10) : ''));
       this.qrCodeImage = qrCode;
     }
   }
@@ -92,21 +128,26 @@ export class ReceiveComponent implements OnInit {
   async receivePending(pendingBlock) {
     const sourceBlock = pendingBlock.hash;
 
-    const walletAccount = this.walletService.wallet.accounts.find(a => a.id == pendingBlock.account);
-    if (!walletAccount) throw new Error(`unable to find receiving account in wallet`);
+    const walletAccount = this.walletService.wallet.accounts.find(a => a.id === pendingBlock.account);
+    if (!walletAccount) {
+      throw new Error(`unable to find receiving account in wallet`);
+    }
 
-    if (this.walletService.walletIsLocked()) return this.notificationService.sendWarning(`Wallet must be unlocked`);
+    if (this.walletService.walletIsLocked()) {
+      return this.notificationService.sendWarning(`Wallet must be unlocked`);
+    }
     pendingBlock.loading = true;
 
     const newBlock = await this.nanoBlock.generateReceive(walletAccount, sourceBlock, this.walletService.isLedgerWallet());
 
     if (newBlock) {
-      this.notificationService.sendSuccess(`Successfully received Nano!`);
+      this.notificationService.removeNotification('success-receive');
+      this.notificationService.sendSuccess(`Successfully received Nano!`, { identifier: 'success-receive' });
       // clear the list of pending blocks. Updated again with reloadBalances()
-      this.walletService.clearPendingBlocks()
+      this.walletService.clearPendingBlocks();
     } else {
       if (!this.walletService.isLedgerWallet()) {
-        this.notificationService.sendError(`There was an error receiving the transaction`)
+        this.notificationService.sendError(`There was a problem receiving the transaction, try manually!`, {length: 10000});
       }
     }
 
@@ -116,7 +157,12 @@ export class ReceiveComponent implements OnInit {
   }
 
   copied() {
-    this.notificationService.sendSuccess(`Successfully copied to clipboard!`);
+    this.notificationService.removeNotification('success-copied');
+    this.notificationService.sendSuccess(`Successfully copied to clipboard!`, { identifier: 'success-copied' });
+  }
+
+  toBigNumber(value) {
+    return new BigNumber(value);
   }
 
 }

@@ -1,8 +1,8 @@
-import { Component, OnInit } from '@angular/core';
-import {WalletService} from "../../services/wallet.service";
-import {NotificationService} from "../../services/notification.service";
-import {LedgerService} from "../../services/ledger.service";
-import {AppSettingsService} from "../../services/app-settings.service";
+import { Component, ElementRef, OnInit, ViewChild } from '@angular/core';
+import {WalletService} from '../../services/wallet.service';
+import {NotificationService} from '../../services/notification.service';
+import {LedgerService, LedgerStatus} from '../../services/ledger.service';
+import {AppSettingsService} from '../../services/app-settings.service';
 
 @Component({
   selector: 'app-wallet-widget',
@@ -17,12 +17,16 @@ export class WalletWidgetComponent implements OnInit {
   unlockPassword = '';
 
   modal: any = null;
+  mayAttemptUnlock = true;
+  timeoutIdAllowingUnlock: any = null;
 
   constructor(
     public walletService: WalletService,
     private notificationService: NotificationService,
     public ledgerService: LedgerService,
     public settings: AppSettingsService) { }
+
+  @ViewChild('passwordInput') passwordInput: ElementRef;
 
   ngOnInit() {
     const UIkit = (window as any).UIkit;
@@ -31,7 +35,7 @@ export class WalletWidgetComponent implements OnInit {
 
     this.ledgerService.ledgerStatus$.subscribe((ledgerStatus: any) => {
       this.ledgerStatus = ledgerStatus.status;
-    })
+    });
   }
 
   async lockWallet() {
@@ -50,14 +54,12 @@ export class WalletWidgetComponent implements OnInit {
   }
 
   async reloadLedger() {
-    this.notificationService.sendInfo(`Checking Ledger Status...`, { identifier: 'ledger-status', length: 0 })
+    this.notificationService.sendInfo(`Checking Ledger Status...`, { identifier: 'ledger-status', length: 0 });
     try {
-      const loaded = await this.ledgerService.loadLedger();
+      await this.ledgerService.loadLedger();
       this.notificationService.removeNotification('ledger-status');
-      if (loaded) {
+      if (this.ledgerStatus === LedgerStatus.READY) {
         this.notificationService.sendSuccess(`Successfully connected to Ledger device`);
-      } else if (loaded === false) {
-        this.notificationService.sendError(`Unable to connect to Ledger device`);
       }
     } catch (err) {
       console.log(`Got error when loading ledger! `, err);
@@ -66,18 +68,53 @@ export class WalletWidgetComponent implements OnInit {
     }
   }
 
-  async unlockWallet() {
-    const unlocked = await this.walletService.unlockWallet(this.unlockPassword);
+  allowUnlock(params: any) {
+    this.mayAttemptUnlock = true;
+    this.timeoutIdAllowingUnlock = null;
     this.unlockPassword = '';
+
+    if (params.focusInputElement === true) {
+      setTimeout(() => { this.passwordInput.nativeElement.focus(); }, 10);
+    }
+  }
+
+  async unlockWallet() {
+    if (this.mayAttemptUnlock === false) {
+      return;
+    }
+
+    this.mayAttemptUnlock = false;
+
+    if (this.timeoutIdAllowingUnlock !== null) {
+      clearTimeout(this.timeoutIdAllowingUnlock);
+    }
+
+    this.timeoutIdAllowingUnlock = setTimeout(
+      () => {
+        this.allowUnlock({ focusInputElement: true });
+      },
+      500
+    );
+
+    const unlocked = await this.walletService.unlockWallet(this.unlockPassword);
 
     if (unlocked) {
       this.notificationService.sendSuccess(`Wallet unlocked`);
       this.modal.hide();
-    } else {
-      this.notificationService.sendError(`Invalid password, please try again!`);
-    }
+      if (this.unlockPassword.length < 6) {
+        // tslint:disable-next-line: max-line-length
+        this.notificationService.sendWarning(`You are using an insecure password and encouraged to change it from settings > manage wallet`);
+      }
 
-    this.unlockPassword = '';
+      if (this.timeoutIdAllowingUnlock !== null) {
+        clearTimeout(this.timeoutIdAllowingUnlock);
+        this.timeoutIdAllowingUnlock = null;
+      }
+
+      this.allowUnlock({ focusInputElement: false });
+    } else {
+      this.notificationService.sendError(`Incorrect password, please try again!`);
+    }
   }
 
 }

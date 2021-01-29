@@ -1,15 +1,17 @@
 import { Injectable } from '@angular/core';
-import {HttpClient} from "@angular/common/http";
-import {HttpHeaders} from "@angular/common/http";
-import {NodeService} from "./node.service";
-import {AppSettingsService} from "./app-settings.service";
+import {HttpClient} from '@angular/common/http';
+import {HttpHeaders} from '@angular/common/http';
+import {NodeService} from './node.service';
+import {AppSettingsService} from './app-settings.service';
 import { TxType } from './util.service';
 
 @Injectable()
 export class ApiService {
+  storeKey = `nanovault-active-difficulty`;
+  difficultyCacheDuration = 60; // time to keep active_difficulty in cache [sec]
   constructor(private http: HttpClient, private node: NodeService, private appSettings: AppSettingsService) { }
 
-  private async request(action, data, skipError=false): Promise<any> {
+  private async request(action, data, skipError= false): Promise<any> {
     data.action = action;
     const apiUrl = this.appSettings.settings.serverAPI;
     if (!apiUrl) {
@@ -17,14 +19,16 @@ export class ApiService {
       return;
     }
     if (this.node.node.status === false) {
-      this.node.setLoading();
+      if (!skipError) {
+        this.node.setLoading();
+      }
     }
-    var header = undefined;
-    if (this.appSettings.settings.serverAuth != null && this.appSettings.settings.serverAuth != "") {
+    let header;
+    if (this.appSettings.settings.serverAuth != null && this.appSettings.settings.serverAuth !== '') {
       header = {
         headers: new HttpHeaders()
           .set('Authorization',  this.appSettings.settings.serverAuth)
-      }
+      };
     }
     return await this.http.post(apiUrl, data, header).toPromise()
       .then(res => {
@@ -33,17 +37,20 @@ export class ApiService {
       })
       .catch(err => {
         if (skipError) return;
-        if (err.status === 500 || err.status === 0) {
-          this.node.setOffline(); // Hard error, node is offline
-          throw err;
-        } else if (err.status === 429) {
-          if (this.appSettings.settings.serverName === 'random') {
-            console.log('Too many requests, new backend...');
-            this.appSettings.loadServerSettings();
-            return this.request(action, data);
+        console.log('Node responded with error', err.status);
+
+        if (this.appSettings.settings.serverName === 'random') {
+          // choose a new backend and do the request again
+          this.appSettings.loadServerSettings();
+          return this.request(action, data);
+        } else {
+          // hard exit
+          if (err.status === 429) {
+            this.node.setOffline('Too Many Requests to the node. Try again later or choose a different node.');
           } else {
-            this.node.setOffline('Too Many Requests to the node. Try again later or choose a different node.')
+            this.node.setOffline();
           }
+          throw err;
         }
       });
   }
@@ -74,13 +81,13 @@ export class ApiService {
     return await this.request('block_info', { hash: hash });
   }
   async blockCount(): Promise<{count: number, unchecked: number, cemented: number }> {
-    return await this.request('block_count', { include_cemented: "true"});
+    return await this.request('block_count', { include_cemented: 'true'});
   }
-  async workGenerate(hash): Promise<{ work: string }> {
-    return await this.request('work_generate', { hash });
+  async workGenerate(hash, difficulty): Promise<{ work: string }> {
+    return await this.request('work_generate', { hash, difficulty });
   }
-  async process(block, subtype:TxType): Promise<{ hash: string, error?: string }> {
-    return await this.request('process', { block: JSON.stringify(block), watch_work:"false", subtype: TxType[subtype] });
+  async process(block, subtype: TxType): Promise<{ hash: string, error?: string }> {
+    return await this.request('process', { block: JSON.stringify(block), watch_work: 'false', subtype: TxType[subtype] });
   }
   async accountHistory(account, count = 25, raw = false): Promise<{history: any }> {
     return await this.request('account_history', { account, count, raw });
@@ -100,10 +107,49 @@ export class ApiService {
   async pendingLimitSorted(account, count, threshold): Promise<any> {
     return await this.request('pending', { account, count, threshold, source: true, include_only_confirmed: true, sorting: true });
   }
-  async version(): Promise<{rpc_version: number, store_version: number, protocol_version: number, node_vendor: string, network: string, network_identifier: string, build_info: string }> {
+  async version(): Promise<{rpc_version: number, store_version: number, protocol_version: number, node_vendor: string, network: string,
+    network_identifier: string, build_info: string }> {
     return await this.request('version', { }, true);
   }
-  async confirmationQuorum(): Promise<{quorum_delta: string, online_weight_quorum_percent: number, online_weight_minimum: string, online_stake_total: string, peers_stake_total: string, peers_stake_required: string }> {
+  async confirmationQuorum(): Promise<{quorum_delta: string, online_weight_quorum_percent: number, online_weight_minimum: string,
+    online_stake_total: string, peers_stake_total: string, peers_stake_required: string }> {
     return await this.request('confirmation_quorum', { }, true);
+  }
+  async activeDifficulty(): Promise<{network_current: string, network_receive_current: string }> {
+    let latestDifficulty;
+    // try cached value first
+    const difficultyStore = localStorage.getItem(this.storeKey);
+    if (difficultyStore) {
+      latestDifficulty = JSON.parse(difficultyStore);
+    }
+    // cache duration has expired, get new value via API
+    if (!difficultyStore || Date.now() > latestDifficulty.latest + (this.difficultyCacheDuration * 1000)) {
+      // ignore API errors (false flag). If backend does not support this we use default difficulty downstream
+      const networkDifficulty = await this.request('active_difficulty', { }, true);
+      // only store if valid response
+      if (networkDifficulty?.network_current?.length === 16 && networkDifficulty?.network_receive_current?.length === 16) {
+        console.log('New active difficulty used for send: ' + networkDifficulty.network_current);
+        console.log('New active difficulty used for receive: ' + networkDifficulty.network_receive_current);
+        latestDifficulty = {
+          latest: Date.now(),
+          network_current: networkDifficulty.network_current,
+          network_receive_current: networkDifficulty.network_receive_current
+        };
+      } else {
+        console.log('Failed to get active_difficulty from server. Using default instead.');
+        latestDifficulty = {
+          latest:  Date.now(),
+          network_current: '',
+          network_receive_current: '',
+        };
+      }
+    }
+    // save to storage even if failed because we want cache duration
+    localStorage.setItem(this.storeKey, JSON.stringify(latestDifficulty));
+    return latestDifficulty;
+  }
+
+  public deleteCache() {
+    localStorage.removeItem(this.storeKey);
   }
 }

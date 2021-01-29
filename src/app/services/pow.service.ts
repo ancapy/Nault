@@ -1,18 +1,16 @@
 import { Injectable } from '@angular/core';
-import {AppSettingsService} from "./app-settings.service";
-import {ApiService} from "./api.service";
-import {NotificationService} from "./notification.service";
-import { PoWSource } from './app-settings.service'
+import {AppSettingsService} from './app-settings.service';
+import {ApiService} from './api.service';
+import {NotificationService} from './notification.service';
+import { PoWSource } from './app-settings.service';
 import Worker from 'worker-loader!./../../assets/lib/cpupow.js';
-import {UtilService} from "./util.service";
+import {UtilService} from './util.service';
 
 const mod = window['Module'];
-//NEW v21 THRESHOLD BELOW TO BE ACTIVATED
-//const baseThreshold = 'fffffff800000000'
-const baseThreshold = 'ffffffc000000000'
-const hardwareConcurrency = window.navigator.hardwareConcurrency || 2
-const workerCount = Math.max(hardwareConcurrency - 1, 1)
-let workerList = []
+export const baseThreshold = 'fffffff800000000'; // threshold since v21 epoch update
+const hardwareConcurrency = window.navigator.hardwareConcurrency || 2;
+const workerCount = Math.max(hardwareConcurrency - 1, 1);
+let workerList = [];
 
 @Injectable()
 export class PowService {
@@ -24,7 +22,12 @@ export class PowService {
   parallelQueue = false;
   processingQueueItem = false;
 
-  constructor(private appSettings: AppSettingsService, private api: ApiService, private notifications: NotificationService, private util: UtilService) { }
+  constructor(
+    private appSettings: AppSettingsService,
+    private api: ApiService,
+    private notifications: NotificationService,
+    private util: UtilService
+  ) { }
 
   /**
    * Determine the best PoW Method available for this browser
@@ -41,7 +44,7 @@ export class PowService {
    * Otherwise, add it into the queue and return when it is ready
    */
   async getPow(hash, multiplier) {
-    const existingPoW = this.PoWPool.find(p => p.hash == hash);
+    const existingPoW = this.PoWPool.find(p => p.hash === hash);
     if (existingPoW) {
       return existingPoW.promise.promise; // Its okay if its resolved already
     }
@@ -54,7 +57,7 @@ export class PowService {
    * Returns a promise that is resolved when work is completed
    */
   addQueueItem(hash, multiplier) {
-    const existingPoW = this.PoWPool.find(p => p.hash == hash);
+    const existingPoW = this.PoWPool.find(p => p.hash === hash);
     if (existingPoW) {
       return existingPoW.promise.promise;
     }
@@ -98,7 +101,7 @@ export class PowService {
       this.webGLAvailable = false;
       return false;
     }
-  };
+  }
 
   /**
    * Gets the next item in the queue and sends it to be processed
@@ -123,21 +126,49 @@ export class PowService {
     const queueItem = this.PoWPool[0];
 
     let powSource = this.appSettings.settings.powSource;
+    const multiplierSource: Number = this.appSettings.settings.multiplierSource;
+    let localMultiplier: Number = 1;
+
     if (powSource === 'best') {
       powSource = this.determineBestPoWMethod();
+    }
+
+    if (powSource === 'clientCPU' || powSource === 'clientWebGL') {
+      if (multiplierSource > 1) { // use manual difficulty
+        localMultiplier = multiplierSource;
+      } else if (multiplierSource === 0) { // use auto difficulty
+        const activeDifficulty = await this.api.activeDifficulty();
+        if (activeDifficulty?.network_current?.length === 16 && activeDifficulty?.network_receive_current?.length === 16) {
+          if (queueItem.multiplier === 1 / 64) { // receive pow
+            localMultiplier = this.util.nano.multiplierFromDifficulty(activeDifficulty.network_receive_current, baseThreshold);
+          } else { // send pow
+            localMultiplier = this.util.nano.multiplierFromDifficulty(activeDifficulty.network_current, baseThreshold);
+          }
+          // clamp to max and min
+          if (localMultiplier > 8) {
+            localMultiplier = 8;
+          } else if (localMultiplier < 1 / 64) {
+            localMultiplier = 1 / 64;
+          }
+        } else {
+          localMultiplier = queueItem.multiplier;
+        }
+      } else { // use default requested difficulty
+        localMultiplier = queueItem.multiplier;
+      }
     }
 
     let work;
     switch (powSource) {
       default:
       case 'server':
-        work = (await this.api.workGenerate(queueItem.hash).then(work => {return work.work}).catch(async err => {return await this.getHashCPUWorker(queueItem.hash, queueItem.multiplier)}));
+        work = this.getHashServer(queueItem.hash, queueItem.multiplier);
         break;
       case 'clientCPU':
-        work = await this.getHashCPUWorker(queueItem.hash, queueItem.multiplier);
+        work = await this.getHashCPUWorker(queueItem.hash, localMultiplier);
         break;
       case 'clientWebGL':
-        work = await this.getHashWebGL(queueItem.hash, queueItem.multiplier);
+        work = await this.getHashWebGL(queueItem.hash, localMultiplier);
         break;
     }
 
@@ -160,6 +191,14 @@ export class PowService {
   /**
    * Actual PoW functions
    */
+  async getHashServer(hash, multiplier) {
+    const newThreshold = this.util.nano.difficultyFromMultiplier(multiplier, baseThreshold);
+    console.log('Generating work with multiplier ' + multiplier + ' at threshold ' +
+      newThreshold + ' using remote server for hash: ', hash);
+    return await this.api.workGenerate(hash, newThreshold)
+    .then(work => work.work)
+    .catch(async err => await this.getHashCPUWorker(hash, multiplier));
+  }
 
   /**
    * Generate PoW using CPU without workers (Not used)
@@ -167,10 +206,10 @@ export class PowService {
   getHashCPUSync(hash) {
     const response = this.getDeferredPromise();
 
-    const PoW = mod.cwrap("launchPoW", 'string', ['string']);
+    const PoW = mod.cwrap('launchPoW', 'string', ['string']);
     const start = Date.now();
     let work;
-    do { work = PoW(hash) } while (work == '0000000000000000');
+    do { work = PoW(hash); } while (work === '0000000000000000');
     console.log(`Synchronous CPU: Found work (${work}) for ${hash} after ${(Date.now() - start) / 1000} seconds`);
 
     response.resolve(work);
@@ -182,7 +221,7 @@ export class PowService {
    */
   async getHashCPUWorker(hash, multiplier) {
     // console.log('Generating work using CPU for', hash);
-    
+
     const response = this.getDeferredPromise();
 
     const start = Date.now();
@@ -201,10 +240,11 @@ export class PowService {
     const newThreshold = this.util.nano.difficultyFromMultiplier(multiplier, baseThreshold);
 
     const work = () => new Promise(resolve => {
-      console.log('Generating work at threshold '+ newThreshold + ' using CPU workers for', hash);
-      workerList = []
+      console.log('Generating work with multiplier ' + multiplier + ' at threshold ' +
+        newThreshold + ' using CPU workers for hash: ', hash);
+      workerList = [];
       for (let i = 0; i < workerCount; i++) {
-        //const worker = new Worker()
+        // const worker = new Worker()
         const worker = new (Worker as any)();
         worker.postMessage({
           blockHash: hash,
@@ -212,11 +252,13 @@ export class PowService {
           workerCount: workerCount,
           workThreshold: newThreshold,
         });
-        worker.onmessage = (work) => {
-          console.log(`CPU Worker: Found work (${work.data}) for ${hash} after ${(Date.now() - start) / 1000} seconds [${workerCount} Workers]`);
-          response.resolve(work.data);
-          for (let workerIndex in workerList) {
-            workerList[workerIndex].terminate();
+        worker.onmessage = (workerwork) => {
+          console.log(`CPU Worker: Found work (${workerwork.data}) for ${hash} after ${(Date.now() - start) / 1000} seconds [${workerCount} Workers]`);
+          response.resolve(workerwork.data);
+          for (const workerIndex in workerList) {
+            if (Object.prototype.hasOwnProperty.call(workerList, workerIndex)) {
+              workerList[workerIndex].terminate();
+            }
           }
           resolve();
         };
@@ -233,7 +275,7 @@ export class PowService {
    */
   getHashWebGL(hash, multiplier) {
     const newThreshold = this.util.nano.difficultyFromMultiplier(multiplier, baseThreshold);
-    console.log('Generating work at threshold '+ newThreshold + ' using WebGL for', hash);
+    console.log('Generating work with multiplier ' + multiplier + ' at threshold ' + newThreshold + ' using WebGL for hash: ', hash);
 
     const response = this.getDeferredPromise();
 
@@ -244,9 +286,9 @@ export class PowService {
           response.resolve(work);
         },
         n => {},
-        '0x'+newThreshold.substring(0,8).toUpperCase() // max threshold for webglpow is currently ffffffff00000000
+        '0x' + newThreshold.substring(0, 8).toUpperCase() // max threshold for webglpow is currently ffffffff00000000
       );
-    } catch(error) {
+    } catch (error) {
       if (error.message === 'webgl2_required') {
         this.webGLAvailable = false;
       }

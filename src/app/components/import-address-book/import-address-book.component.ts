@@ -1,7 +1,8 @@
 import { Component, OnInit } from '@angular/core';
-import {NotificationService} from "../../services/notification.service";
-import {ActivatedRoute} from "@angular/router";
-import {AddressBookService} from "../../services/address-book.service";
+import {NotificationService} from '../../services/notification.service';
+import {ActivatedRoute} from '@angular/router';
+import {AddressBookService} from '../../services/address-book.service';
+import {Router} from '@angular/router';
 
 @Component({
   selector: 'app-import-address-book',
@@ -17,25 +18,38 @@ export class ImportAddressBookComponent implements OnInit {
   conflictingEntries = 0;
   newEntries = 0;
   existingEntries = 0;
+  hostname = '';
 
-  constructor(private route: ActivatedRoute, private notifications: NotificationService, private addressBook: AddressBookService) { }
+  constructor(
+    private route: ActivatedRoute,
+    private notifications: NotificationService,
+    private addressBook: AddressBookService,
+    private router: Router) { }
 
   ngOnInit() {
     const importData = this.route.snapshot.fragment;
-    if (!importData || !importData.length) return this.importDataError(`No import data found.  Check your link and try again.`);
+    const queryData = this.route.snapshot.queryParams;
+    if (!importData || !importData.length) {
+      return this.importDataError(`No import data found.  Check your link and try again.`);
+    }
 
+    if ('hostname' in queryData) this.hostname = queryData.hostname;
     const decodedData = atob(importData);
 
     try {
       const importBlob = JSON.parse(decodedData);
-      if (!importBlob || !importBlob.length) return this.importDataError(`Bad import data.  Check your link and try again.`);
+      if (!importBlob || !importBlob.length) {
+        return this.importDataError(`Bad import data.  Check your link and try again.`);
+      }
       this.validImportData = true;
       this.importData = importBlob;
       this.activePanel = 'import';
 
       // Now, find conflicting accounts
-      for (let entry of importBlob) {
-        if (!entry.account || !entry.name) continue; // Data missing?
+      for (const entry of importBlob) {
+        if (!entry.account || !entry.name) {
+          continue; // Data missing?
+        }
         entry.originalName = this.addressBook.getAccountName(entry.account);
         if (!entry.originalName) {
           this.newEntries++;
@@ -54,7 +68,7 @@ export class ImportAddressBookComponent implements OnInit {
   async confirmImport() {
     // Go through our address book and see which ones need to be saved
     let importedCount = 0;
-    for (let entry of this.importData) {
+    for (const entry of this.importData) {
       if (!entry.originalName) {
         await this.addressBook.saveAddress(entry.account, entry.name);
         importedCount++;
@@ -64,8 +78,8 @@ export class ImportAddressBookComponent implements OnInit {
       }
     }
 
+    this.router.navigate(['address-book']);
     this.notifications.sendSuccess(`Successfully imported ${importedCount} address book entries`);
-    this.activePanel = 'imported';
   }
 
   importDataError(message) {

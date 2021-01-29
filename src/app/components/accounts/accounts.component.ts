@@ -1,6 +1,6 @@
 import { Component, OnInit } from '@angular/core';
-import {Subject, timer} from "rxjs";
-import {debounce} from "rxjs/operators";
+import {Subject, timer} from 'rxjs';
+import {debounce} from 'rxjs/operators';
 import {
   AppSettingsService,
   LedgerService,
@@ -9,7 +9,7 @@ import {
   NotificationService,
   RepresentativeService,
   WalletService
-} from "../../services";
+} from '../../services';
 
 @Component({
   selector: 'app-accounts',
@@ -19,6 +19,7 @@ import {
 export class AccountsComponent implements OnInit {
   accounts = this.walletService.wallet.accounts;
   isLedgerWallet = this.walletService.isLedgerWallet();
+  isSingleKeyWallet = this.walletService.isSingleKeyWallet();
   viewAdvanced = false;
   newAccountIndex = null;
 
@@ -37,7 +38,8 @@ export class AccountsComponent implements OnInit {
   async ngOnInit() {
     this.reloadRepWarning$.subscribe(a => {
       this.representatives.detectChangeableReps();
-    })
+    });
+    this.sortAccounts();
   }
 
   async createAccount() {
@@ -49,9 +51,9 @@ export class AccountsComponent implements OnInit {
     // Advanced view, manual account index?
     let accountIndex = null;
     if (this.viewAdvanced && this.newAccountIndex != null) {
-      let index = parseInt(this.newAccountIndex);
+      const index = parseInt(this.newAccountIndex, 10);
       if (index < 0) return this.notificationService.sendWarning(`Invalid account index - must be positive number`);
-      const existingAccount = this.walletService.wallet.accounts.find(a => a.index == index);
+      const existingAccount = this.walletService.wallet.accounts.find(a => a.index === index);
       if (existingAccount) {
         return this.notificationService.sendWarning(`The account at this index is already loaded`);
       }
@@ -68,19 +70,22 @@ export class AccountsComponent implements OnInit {
   }
 
   sortAccounts() {
-    if (this.walletService.isLocked()) {
-      return this.notificationService.sendError(`Wallet is locked.`);
-    }
-    if (!this.walletService.isConfigured()) return this.notificationService.sendError(`Wallet is not configured`);
-    if (this.walletService.wallet.accounts.length <= 1) return this.notificationService.sendWarning(`You need at least 2 accounts to sort them`);
+    // if (this.walletService.isLocked()) return this.notificationService.sendError(`Wallet is locked.`);
+    // if (!this.walletService.isConfigured()) return this.notificationService.sendError(`Wallet is not configured`);
+    // if (this.walletService.wallet.accounts.length <= 1) {
+      // return this.notificationService.sendWarning(`You need at least 2 accounts to sort them`);
+    // }
+    if (this.walletService.isLocked() || !this.walletService.isConfigured() ||
+      this.walletService.wallet.accounts.length <= 1) return;
     this.walletService.wallet.accounts = this.walletService.wallet.accounts.sort((a, b) => a.index - b.index);
     // this.accounts = this.walletService.wallet.accounts;
     this.walletService.saveWalletExport(); // Save new sorted accounts list
-    this.notificationService.sendSuccess(`Successfully sorted accounts by index!`);
+    // this.notificationService.sendSuccess(`Successfully sorted accounts by index!`);
   }
 
   copied() {
-    this.notificationService.sendSuccess(`Successfully copied to clipboard!`);
+    this.notificationService.removeNotification('success-copied');
+    this.notificationService.sendSuccess(`Successfully copied to clipboard!`, { identifier: 'success-copied' });
   }
 
   async deleteAccount(account) {

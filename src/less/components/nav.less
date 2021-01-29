@@ -451,6 +451,35 @@
 					padding-bottom: 4px;
 					white-space: nowrap;
 					transition: color 100ms ease-in-out;
+
+					> .incoming-label {
+						background: @global-primary-background;
+						border-radius: 10px;
+						font-size: 10px;
+						padding: 2px 8px;
+						margin-right: 3px;
+						vertical-align: 1px;
+						text-transform: uppercase;
+						color: #FFF;
+
+						> .text-full {
+							display: none;
+						}
+
+						> .text-snippet {
+							display: inline-block;
+						}
+
+						@media (min-width: 1500px) {
+							> .text-full {
+								display: inline-block;
+							}
+
+							> .text-snippet {
+								display: none;
+							}
+						}
+					}
 				}
 
 				&.converted {
@@ -487,6 +516,10 @@
 		&:hover > .representative-name-row > .name {
 			border-bottom-style: dotted;
 			border-color: #868AB0;
+
+			&.no-interact {
+				border-color: transparent;
+			}
 		}
 
 		> h2 {
@@ -520,6 +553,12 @@
 			&:hover {
 				border-bottom-style: solid;
 				border-color: #FFF;
+			}
+
+			&.no-interact {
+				&:hover {
+					border-color: transparent;
+				}
 			}
 		}
 
@@ -556,6 +595,10 @@
 		&.health-unknown {
 			@health-state-color: #868AB0;
 			.health-state-apply-colors();
+		}
+
+		&.health-loading > .uk-spinner {
+			margin-right: 6px;
 		}
 
 		> .health-icon {
@@ -718,7 +761,7 @@
 		padding: 0;
 
 		&.uk-parent > a::after {
-			margin-right: 10px;
+			margin-right: 17px;
 		}
 
 		&.uk-parent.uk-open > a {
@@ -746,8 +789,8 @@
 			}
 
 			&.active {
-				border-left-color: #4E91E0;
-				color: #4E91E0;
+				border-left-color: @global-primary-background;
+				color: @global-primary-background;
 			}
 		}
 
@@ -804,7 +847,7 @@
 					}
 
 					&.active {
-						color: #4E91E0;
+						color: @global-primary-background;
 					}
 				}
 			}
@@ -814,9 +857,10 @@
 
 .nav-search {
 	background: rgba(56, 56, 68, 0.3);
-	padding: 3px 15px 3px 18px;
-	border-bottom: 1px solid @nav-border-color;
+	padding: 3px 12px 3px 8px;
 	font-size: 14px;
+	border-radius: 10px;
+	margin: 10px 10px 5px 10px;
 
 	.uk-search-icon {
 		width: 30px;
@@ -825,5 +869,43 @@
 
 	input {
 		color: @nav-half-muted-color;
+		border: 0 !important;
+	}
+}
+
+.nav-container > .footer {
+	padding: 15px 0 20px 0;
+
+	> .attribution {
+		color: #777;
+		font-size: 13px;
+		margin-top: 15px;
+
+		> a {
+			text-decoration: none;
+			padding-bottom: 2px;
+			border-bottom: 2px solid transparent;
+			transition: border-color 100ms ease-in-out;
+			color: #BBB;
+
+			&:hover {
+				border-color: #BBB;
+			}
+		}
+	}
+
+	.footer-link {
+		color: #FFF;
+	}
+
+	.donation-icon {
+		color: @global-primary-background;
+		opacity: 1;
+
+		&:hover {
+			svg path {
+				fill: @global-primary-background;
+			}
+		}
 	}
 }
